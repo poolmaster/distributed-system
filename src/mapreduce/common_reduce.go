@@ -52,7 +52,7 @@ func doReduce(
 	nMap int, // the number of map tasks that were run ("M" in the paper)
 	reduceF func(key string, values []string) string,
 ) {
-  debug("doReduce(): %s:%d\n", jobName, reduceTaskNumber) 
+  //debug("doReduce(): %s:%d\n", jobName, reduceTaskNumber) 
   
   kvs := make(map[string][]string)  //final result kvs
   //decode intermediate file from map tasks

@@ -12,7 +12,7 @@ import (
 // merge combines the results of the many reduce jobs into a single output file
 // XXX use merge sort
 func (mr *Master) merge() {
-  debug("Merge phase: ")
+  debug("Merge phase.. \n")
 	kvs := make(map[string]string)
 	for i := 0; i < mr.nReduce; i++ {
 		p := mergeName(mr.jobName, i)
@@ -61,6 +61,7 @@ func removeFile(n string) {
 func (mr *Master) CleanupFiles() {
 	for i := range mr.files {
 		for j := 0; j < mr.nReduce; j++ {
+      debug ("remove %d %d\n", i, j)
 			removeFile(reduceName(mr.jobName, i, j))
 		}
 	}

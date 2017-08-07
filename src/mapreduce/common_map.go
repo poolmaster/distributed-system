@@ -60,7 +60,7 @@ func doMap(
 	mapF func(file string, contents string) []KeyValue,
 ) {
 
-  debug("doMap(): %s:%d\n", jobName, mapTaskNumber) 
+  //debug("doMap(): %s:%d\n", jobName, mapTaskNumber) 
   
   //open file and get contents out
   fp, err := os.Open(inFile) 
