@@ -378,6 +378,7 @@ func (cfg *config) wait(index int, n int, startTerm int) interface{} {
 	return cmd
 }
 
+
 // do a complete agreement.
 // it might choose the wrong leader initially,
 // and have to re-submit after giving up.
