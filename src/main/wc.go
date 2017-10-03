@@ -1,9 +1,9 @@
 package main
 
 import (
-	"fmt"
-	"mapreduce"
-	"os"
+  "fmt"
+  "mapreduce"
+  "os"
   "unicode"
   "strings"
   "strconv"
