@@ -34,7 +34,7 @@ func TestInitialElection2A(t *testing.T) {
 	time.Sleep(2 * RaftElectionTimeout)
 	term2 := cfg.checkTerms()
 	if term1 != term2 {
-		fmt.Printf("warning: term changed even though there were no failures")
+    fmt.Printf("warning: term changed even though there were no failures: term1=%v, temr2=%v", term1, term2)
 	}
 
 	fmt.Printf("  ... Passed\n")
@@ -503,7 +503,7 @@ loop:
 	fmt.Printf("  ... Passed\n")
 }
 
-func TestPersist12C(t *testing.T) {
+func TestPersist12C(t *testing.T) {// {{{
 	servers := 3
 	cfg := make_config(t, servers, false)
 	defer cfg.cleanup()
@@ -547,9 +547,9 @@ func TestPersist12C(t *testing.T) {
 	cfg.one(16, servers)
 
 	fmt.Printf("  ... Passed\n")
-}
+}// }}}
 
-func TestPersist22C(t *testing.T) {
+func TestPersist22C(t *testing.T) {// {{{
 	servers := 5
 	cfg := make_config(t, servers, false)
 	defer cfg.cleanup()
@@ -593,9 +593,9 @@ func TestPersist22C(t *testing.T) {
 	cfg.one(1000, servers)
 
 	fmt.Printf("  ... Passed\n")
-}
+}// }}}
 
-func TestPersist32C(t *testing.T) {
+func TestPersist32C(t *testing.T) {// {{{
 	servers := 3
 	cfg := make_config(t, servers, false)
 	defer cfg.cleanup()
@@ -623,7 +623,7 @@ func TestPersist32C(t *testing.T) {
 	cfg.one(104, servers)
 
 	fmt.Printf("  ... Passed\n")
-}
+}// }}}
 
 //
 // Test the scenarios described in Figure 8 of the extended Raft paper. Each
@@ -635,7 +635,7 @@ func TestPersist32C(t *testing.T) {
 // The leader in a new term may try to finish replicating log entries that
 // haven't been committed yet.
 //
-func TestFigure82C(t *testing.T) {
+func TestFigure82C(t *testing.T) {// {{{
 	servers := 5
 	cfg := make_config(t, servers, false)
 	defer cfg.cleanup()
@@ -689,9 +689,9 @@ func TestFigure82C(t *testing.T) {
 	cfg.one(rand.Int(), servers)
 
 	fmt.Printf("  ... Passed\n")
-}
+}// }}}
 
-func TestUnreliableAgree2C(t *testing.T) {
+func TestUnreliableAgree2C(t *testing.T) {// {{{
 	servers := 5
 	cfg := make_config(t, servers, true)
 	defer cfg.cleanup()
@@ -718,9 +718,9 @@ func TestUnreliableAgree2C(t *testing.T) {
 	cfg.one(100, servers)
 
 	fmt.Printf("  ... Passed\n")
-}
+}// }}}
 
-func TestFigure8Unreliable2C(t *testing.T) {
+func TestFigure8Unreliable2C(t *testing.T) {// {{{
 	servers := 5
 	cfg := make_config(t, servers, true)
 	defer cfg.cleanup()
@@ -728,7 +728,7 @@ func TestFigure8Unreliable2C(t *testing.T) {
 	fmt.Printf("Test (2C): Figure 8 (unreliable) ...\n")
 
 	cfg.one(rand.Int()%10000, 1)
-
+  
 	nup := servers
 	for iters := 0; iters < 1000; iters++ {
 		if iters == 200 {
@@ -741,7 +741,7 @@ func TestFigure8Unreliable2C(t *testing.T) {
 				leader = i
 			}
 		}
-
+  
 		if (rand.Int() % 1000) < 100 {
 			ms := rand.Int63() % (int64(RaftElectionTimeout/time.Millisecond) / 2)
 			time.Sleep(time.Duration(ms) * time.Millisecond)
@@ -773,9 +773,9 @@ func TestFigure8Unreliable2C(t *testing.T) {
 	cfg.one(rand.Int()%10000, servers)
 
 	fmt.Printf("  ... Passed\n")
-}
+}// }}}
 
-func internalChurn(t *testing.T, unreliable bool) {
+func internalChurn(t *testing.T, unreliable bool) {// {{{
 
 	if unreliable {
 		fmt.Printf("Test (2C): unreliable churn ...\n")
@@ -918,7 +918,7 @@ func internalChurn(t *testing.T, unreliable bool) {
 	}
 
 	fmt.Printf("  ... Passed\n")
-}
+}// }}}
 
 func TestReliableChurn2C(t *testing.T) {
 	internalChurn(t, false)
