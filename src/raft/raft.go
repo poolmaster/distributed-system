@@ -37,7 +37,7 @@ const (
   
   HB_INTERVAL = 50 * time.Millisecond
   
-  NUM_LOG_RPC = 5   //number of log entries sent per RPC
+  NUM_LOG_RPC = 10   //number of log entries sent per RPC
   MAX_CHAN_DEPTH = 100
 )
 
@@ -66,9 +66,9 @@ type Raft struct {// {{{
 	persister   *Persister          // Object to hold this peer's persisted state
 	me          int                 // this peer's index into peers[]
   
-  cmtChan     chan bool
+  cmtChan     chan bool           //send commit signal 
   applyChan   chan ApplyMsg       //chan to handle committed message
-  electTimer  *time.Timer
+  electTimer  *time.Timer         //timer for election cycle
   state       int 
   voteCnt     int 
 
@@ -174,7 +174,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {// 
   if args.Term < rf.curTerm {
     reply.Term = rf.curTerm
     reply.Vote = false
-    rf.debug("request vote received from Node %v: Obsolete term\n", args.CandId)
+    rf.debug("request-vote from N%vT%v: Obsolete Term\n", args.CandId, args.Term)
     return 
   }
   
@@ -185,21 +185,23 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {// 
     rf.persist()
   }
 
-  reply.Term = args.Term
+  reply.Term = rf.curTerm
+  reply.Vote = false
   if rf.votedFor == -1 {
     lastLogTerm := rf.getLastLogTerm()
+    rf.debug("request vote received from N%vT%v cand.LLT,LLI=%v,%v, node.LLT=%v,%v\n", 
+      args.CandId, args.Term, args.LastLogTerm, args.LastLogIdx, lastLogTerm, len(rf.log) - 1)
     if (args.LastLogTerm < lastLogTerm) {
-      reply.Vote = false
-      rf.debug("request vote received from Node %v: Less up-to-date log. No Vote\n", args.CandId)
+      rf.debug("request vote received from N%vT%v: Less up-to-date log. No Vote\n", args.CandId, args.Term)
     } else if (args.LastLogTerm == lastLogTerm &&
                args.LastLogIdx < len(rf.log) - 1) {
-      reply.Vote = false
-      rf.debug("request vote received from Node %v: Less up-to-date log. No Vote\n", args.CandId)
+      rf.debug("request vote received from N%vT%v: Less up-to-date log. No Vote.\n", args.CandId, args.Term)
     } else {
-      rf.votedFor = args.CandId
-      rf.persist()
       reply.Vote = true  
+      rf.votedFor = args.CandId
+      rf.state = FOLLOWER
       rf.electTimer.Reset(rf.getRandTimeout())
+      rf.persist()
     }
   }
 }// }}}
@@ -239,34 +241,33 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
   defer rf.mu.Unlock()
   
   if !ok {
-    rf.debug("No response from Node %v\n", server)
+    rf.debug("No response from N%vT%v\n", server, reply.Term)
     return false
   }
 
+  if reply.Term > rf.curTerm {
+    rf.debug("vote fail from N%vT%v: convert to FOLLOWER\n", server, reply.Term)
+    rf.curTerm = reply.Term
+    rf.votedFor = -1
+    rf.state = FOLLOWER
+    rf.persist()
+  }
   //revoke because of new term or heartbeat received 
   if rf.state == FOLLOWER {
     return false
   }
 
-  if reply.Term > rf.curTerm {
-    rf.debug("request vote reply: Term replied bigger: reply.term=%v\n", reply.Term)
-    rf.curTerm = reply.Term
-    rf.votedFor = -1
-    rf.state = FOLLOWER
-    rf.persist()
-    return true
-  }
   if reply.Term < rf.curTerm {
-    rf.debug("request vote reply: term replied smaller (dump obsolete): reply.term=%v\n", reply.Term)
+    rf.debug("vote fail from N%vT%v: obsolete vote\n", server, reply.Term)
     return false 
   }
+
   if reply.Vote {
-    rf.debug("request vote reply: vote valid\n")
+    rf.debug("vote success from N%vT%v\n", server, reply.Term)
     rf.voteCnt++
     if rf.state == CANDIDATE && rf.voteCnt > len(rf.peers) / 2 {
       rf.debug("leader elected\n") 
       rf.state = LEADER
-      rf.nextIdx = make([]int, len(rf.peers))
       for i := range(rf.peers) { 
         //last log entry index + 1
         //prevLogIdx always send, so heartBeat withouth entry
@@ -295,7 +296,7 @@ type AppendEntryArgs struct {
 type AppendEntryReply struct {
   Term        int
   Success     bool
-  MatchIdx    int
+  NextIdx     int
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntryArgs, reply *AppendEntryReply) {// {{{
@@ -307,32 +308,37 @@ func (rf *Raft) AppendEntries(args *AppendEntryArgs, reply *AppendEntryReply) {/
   if args.Term < rf.curTerm { 
     reply.Term = rf.curTerm
     reply.Success = false
-    //reply.MatchIdx = 0 
-    rf.debug("heartbeat received from Node %v: Obsolete term\n", args.LeaderId)
+    reply.NextIdx = -1 //mark as -1 to distinguish with other fail
+    rf.debug("heartbeat from N%vT%v: Obsolete Term\n", args.LeaderId, args.Term)
     return
   }
   //valid heart beat (maybe with cmds)
-  rf.electTimer.Reset(rf.getRandTimeout())
-  if args.Term > rf.curTerm {
-    rf.curTerm = args.Term
-    rf.state = FOLLOWER
+  if args.Term == rf.curTerm && rf.state == LEADER {
+    err := fmt.Sprintf("heartbeat from (N%vT%v): leader conflict", args.LeaderId, args.Term)
+    panic(err)
   }
+
+  rf.curTerm = args.Term
+  rf.state = FOLLOWER
+  rf.electTimer.Reset(rf.getRandTimeout())
+  
   reply.Term = rf.curTerm
   //term mismatch on prevlog
   if args.PrevLogIdx >= len(rf.log) {
-    reply.Success = false  
-    reply.MatchIdx = len(rf.log) - 1 
-    rf.debug("heartbeat received from Node %v: PrevLogIdx out of range: LastLogIdx=%v\n", args.LeaderId, reply.MatchIdx)
+    reply.Success = false 
+    reply.NextIdx = len(rf.log) 
+    rf.debug("heartbeat from N%vT%v: PLI out of range: LogSize=%v\n", args.LeaderId, args.Term, reply.NextIdx)
     return 
   }
   if rf.log[args.PrevLogIdx].Term != args.PrevLogTerm {
     reply.Success = false   
     //bypass all entries in the conflicting term
     //find the first entry with same term as conflicting entry
-    //and (- 1)
-    reply.MatchIdx = rf.getFirstLogIdxOfTerm(rf.log[args.PrevLogIdx].Term) - 1
-    //reply.MatchIdx = args.PrevLogIdx - 1
-    rf.debug("heartbeat received from Node %v: Term mismatch on PrevLogIdx\n", args.LeaderId)
+    //and
+    reply.NextIdx = rf.getFirstLogIdxOfTerm(rf.log[args.PrevLogIdx].Term)
+    //reply.NextIdx = args.PrevLogIdx
+    rf.debug("heartbeat from N%vT%v: Term mismatch on log@PLI (leader=%v,follower=%v\n", 
+      args.LeaderId, args.Term, args.PrevLogTerm, rf.log[args.PrevLogIdx].Term)
     return 
   }
   //update logs
@@ -348,22 +354,30 @@ func (rf *Raft) AppendEntries(args *AppendEntryArgs, reply *AppendEntryReply) {/
   //update cmtIdx
   lastNewIdx := args.PrevLogIdx + len(args.Entries)
   if args.LeaderCmtIdx > rf.cmtIdx {
-    oldCmtIdx := rf.cmtIdx
+    //oldCmtIdx := rf.cmtIdx
     if args.LeaderCmtIdx < lastNewIdx {
       rf.cmtIdx = args.LeaderCmtIdx
-    } else {
+    } else if rf.cmtIdx < lastNewIdx { 
+      //possibly no log updates causing lastNewIdx < cmtIdx ?
       rf.cmtIdx = lastNewIdx
     }
     rf.cmtChan<- true
     rf.debug("(Follower) New log being committed. Leader.cmtIdx=%v\n", rf.cmtIdx)
-    for i := oldCmtIdx + 1; i <= rf.cmtIdx; i++ {
-      rf.debug("\tCommit: idx=%v, term=%v cmd=%v\n", i, rf.log[i].Term, rf.log[i].Cmd)
-    }
+    //for i := oldCmtIdx + 1; i <= rf.cmtIdx; i++ {
+    //  rf.debug("\tCommit: idx=%v, term=%v cmd=%v\n", i, rf.log[i].Term, rf.log[i].Cmd)
+    //}
   }
   reply.Success = true  
-  reply.MatchIdx = lastNewIdx
-  rf.debug("heartbeat received from Node %v: args.PrevLogIdx=%v, NumLog=%v, reply.MatchIdx=%v\n",
-    args.LeaderId, args.PrevLogIdx, len(args.Entries), reply.MatchIdx)
+  reply.NextIdx = lastNewIdx + 1
+  if len(args.Entries) > 0 {
+    rf.debug("heartbeat from N%vT%v: NumLogAdded=%v.\n", args.LeaderId, args.Term, len(args.Entries))
+    //cmdList := "["
+    //for i := range rf.log {
+    //  cmdList += fmt.Sprintf("%v/", rf.log[i].Term)
+    //  cmdList += fmt.Sprintf("%v, ", rf.log[i].Cmd)
+    //}
+    //rf.debug("\t\t%v\n", cmdList)
+  }
   return
 }// }}}
 
@@ -378,26 +392,35 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntryArgs, reply *Appe
     return false
   }
   //obsolete term + prevlog mismatch
-  if !reply.Success {   
-    if reply.Term > rf.curTerm {
+  if !reply.Success || rf.state != LEADER {   
+    if reply.Term > rf.curTerm { 
       rf.curTerm = reply.Term
       rf.state = FOLLOWER
       rf.persist()
-      rf.debug("heartbeat reply from Node %v: failed (bigger term): reply.Term=%v\n", server, reply.Term)
-    } else if rf.state == LEADER {
-      rf.nextIdx[server] = reply.MatchIdx + 1
-      //rf.matchIdx[server] = reply.MatchIdx  //BUG: only success could update matchIdx
-      rf.debug("heartbeat reply from Node %v: Log@prevLogIdx mismatch: reply.MatchIdx=%v\n", server, reply.MatchIdx)
+      rf.debug("return heartbeat from N%vT%v: failed (newer term)\n", server, reply.Term)
+    } else if rf.state == LEADER && reply.NextIdx > 0 { //BUG: could accidentally update next to -1/0
+      rf.nextIdx[server] = reply.NextIdx //BUG: only success could update matchIdx
+      rf.debug("return heartbeat from N%vT%v: Log@PLI mismatch: updated NextIdx=%v\n", server, reply.Term, reply.NextIdx)
     }
     return false
   }
+
   //log applied success
-  rf.matchIdx[server] = reply.MatchIdx 
+  rf.matchIdx[server] = reply.NextIdx - 1
   //only need to apply when matchidx change bigger than cmtIdx
-  if reply.MatchIdx > rf.cmtIdx {
-    rf.debug("heartbeat reply from Node %v: uncommit log replicated: matchIdx=%v > cmtIdx=%v\n", server, reply.MatchIdx, rf.cmtIdx)
-    oldCmtIdx := rf.cmtIdx
-    for i := rf.cmtIdx + 1; i <= reply.MatchIdx; i++ {
+  if rf.matchIdx[server] > rf.cmtIdx {
+    rf.debug("return heartbeat from N%vT%v: log replicated: matchIdx=%v > cmtIdx=%v\n",
+      server, reply.Term, reply.NextIdx - 1, rf.cmtIdx)
+    //oldCmtIdx := rf.cmtIdx
+    for i := reply.NextIdx - 1; i > rf.cmtIdx; i-- {
+      if rf.log[i].Term < rf.curTerm {
+        //BUG: prolem of Figure 8 in paper
+        //only commit log in current term by counting
+        break
+      } else if rf.log[i].Term > rf.curTerm { 
+        fmt.Println("Leader gets log newer than its term: logTerm=%v", rf.log[i].Term)
+        panic("Leader gets log newer than its term!")
+      }
       applyCnt := 1
       for j := range rf.peers {
         if rf.matchIdx[j] >= i {
@@ -408,14 +431,15 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntryArgs, reply *Appe
         rf.cmtIdx = i
         rf.cmtChan<- true
         rf.debug("(Leader) New log being committed. Leader.cmtIdx=%v\n", rf.cmtIdx)
-        for j := range (rf.peers) {
-          rf.debug("follower's matchIdx[%v]=%v\n", j, rf.matchIdx[j])
-        }
+        //for j := range (rf.peers) {
+        //  rf.debug("follower's matchIdx[%v]=%v\n", j, rf.matchIdx[j])
+        //}
+        break //older logs are committed automatically
       }
     }
-    for i := oldCmtIdx + 1; i <= rf.cmtIdx; i++ {
-      rf.debug("\tCommit: idx=%v, term=%v cmd=%v\n", i, rf.log[i].Term, rf.log[i].Cmd)
-    }
+    //for i := oldCmtIdx + 1; i <= rf.cmtIdx; i++ {
+    //  rf.debug("\tCommit: idx=%v, term=%v cmd=%v\n", i, rf.log[i].Term, rf.log[i].Cmd)
+    //}
   }
   return true
 }// }}}
@@ -485,6 +509,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
   rf.voteCnt = 0
   rf.cmtIdx = 0
   rf.applyIdx = 0
+  rf.nextIdx = make([]int, len(rf.peers)) //initialize when become leader
   rf.matchIdx = make([]int, len(rf.peers))
   for i := range rf.matchIdx {
     rf.matchIdx[i] = 0
@@ -557,12 +582,10 @@ func (rf *Raft) broadcastRequestVote() {// {{{
   voteArgs.CandId = rf.me
   voteArgs.LastLogTerm = rf.getLastLogTerm() 
   voteArgs.LastLogIdx = len(rf.log) - 1
-  me := rf.me
-  state := rf.state 
   rf.electTimer.Reset(rf.getRandTimeout())  //reset timer once broadcast
   rf.mu.Unlock()
   for i := range rf.peers {
-    if i != me && state == CANDIDATE {
+    if i != rf.me && rf.state == CANDIDATE {
       go func (i int) {
         var voteReply RequestVoteReply
         rf.sendRequestVote(i, &voteArgs, &voteReply)
@@ -579,7 +602,6 @@ func (rf *Raft) runAsCandidate() {// {{{
   rf.persist()
   rf.mu.Unlock()
   rf.broadcastRequestVote() 
-  
   <-rf.electTimer.C  //wake by split-vote/network-fail OR leader elected
 }// }}}
 
@@ -591,11 +613,10 @@ func (rf *Raft) broadcastAppendEntries() {// {{{
   appendArgs.LeaderCmtIdx = rf.cmtIdx
   rf.mu.Unlock()
   for i := range rf.peers {
-    if i != rf.me {
+    if i != rf.me && rf.state == LEADER {
       rf.mu.Lock()
       appendArgs.PrevLogIdx = rf.nextIdx[i] - 1
       appendArgs.Entries = make([]LogEntry, 0)
-      //rf.debug("prevIdx=%v, nextIdx=%v, logSize=%v", appendArgs.PrevLogIdx, rf.nextIdx[i], len(rf.log) )
       appendArgs.PrevLogTerm = rf.log[appendArgs.PrevLogIdx].Term
       logCnt := 0
       for j := 0; j < NUM_LOG_RPC; j++ {
@@ -617,20 +638,20 @@ func (rf *Raft) broadcastAppendEntries() {// {{{
 }// }}}
 
 func (rf *Raft) runAsLeader() {// {{{
-  time.Sleep(HB_INTERVAL)
   _, isLeader := rf.GetState()
   //leader state could be changed due to obsolete term
   //add condition to reduce RPC messages 
   if isLeader {
     rf.broadcastAppendEntries()
   }
+  time.Sleep(HB_INTERVAL)
 }// }}}
 
 func (rf *Raft) debug(format string, a ...interface{}) (n int, err error) {// {{{
-  format = fmt.Sprintf("Node %v Term %v: ", rf.me, rf.curTerm) + format
+  format = fmt.Sprintf("N%vT%v:\t", rf.me, rf.curTerm) + format
   //DPrintf(format, a...) 
-  fmt.Printf(format, a...)
+  if Debug > 0 {
+    fmt.Printf(format, a...)
+  }
   return 
 }// }}}
-
-
