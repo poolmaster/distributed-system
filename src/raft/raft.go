@@ -65,6 +65,7 @@ type Raft struct {// {{{
 	peers       []*labrpc.ClientEnd // RPC end points of all peers
 	persister   *Persister          // Object to hold this peer's persisted state
 	me          int                 // this peer's index into peers[]
+  leaderId    int                 // record leader id for redirection
   
   cmtChan     chan bool           //send commit signal 
   applyChan   chan ApplyMsg       //chan to handle committed message
@@ -95,6 +96,12 @@ func (rf *Raft) GetState() (int, bool) {// {{{
 }// }}}
 
 //Helper Functions// {{{
+func (rf *Raft) GetLeaderId() int {
+  rf.mu.Lock()
+  defer rf.mu.Unlock()
+  return rf.leaderId
+}
+
 func (rf *Raft) getRandTimeout() (time.Duration) {
   return (time.Duration(rand.Int63() % (TIMEOUT_MAX - TIMEOUT_MIN) + TIMEOUT_MIN) *
           time.Millisecond)
@@ -268,6 +275,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
     if rf.state == CANDIDATE && rf.voteCnt > len(rf.peers) / 2 {
       rf.debug("leader elected\n") 
       rf.state = LEADER
+      rf.leaderId = rf.me
       for i := range(rf.peers) { 
         //last log entry index + 1
         //prevLogIdx always send, so heartBeat withouth entry
@@ -286,7 +294,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 // AppendEntries RPC
 type AppendEntryArgs struct {
   Term          int
-  LeaderId      int  //for redirection, not needed in this project
+  LeaderId      int  //for redirection
   PrevLogIdx    int  
   PrevLogTerm   int
   Entries       []LogEntry
@@ -320,6 +328,7 @@ func (rf *Raft) AppendEntries(args *AppendEntryArgs, reply *AppendEntryReply) {/
 
   rf.curTerm = args.Term
   rf.state = FOLLOWER
+  rf.leaderId = args.LeaderId
   rf.electTimer.Reset(rf.getRandTimeout())
   
   reply.Term = rf.curTerm
@@ -500,6 +509,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
+  rf.leaderId = -1
   rf.cmtChan = make(chan bool, MAX_CHAN_DEPTH)
   rf.applyChan = applyCh
 
