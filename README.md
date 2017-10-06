@@ -5,5 +5,5 @@ Implementation of a distributed system in Go for MIT 6.824
 - [x] Raft
   * Leader Election, HeartBeat, Log Replication, Persistence Support
 - [ ] Fault-tolerant Key/Value Service
-  * in Progress: basic functionality done
+  * key-value storage working. implementing log compaction 
 - [ ] Sharded Key/Value Service

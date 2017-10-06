@@ -5,8 +5,12 @@ import (
   "crypto/rand"
   "math/big"
   "fmt"
+  "time"
 )
 
+const (
+  REQ_INTERVAL = 50 * time.Millisecond //after try all servers, client stops for a bit
+)
 
 type Clerk struct {
 	servers   []*labrpc.ClientEnd
@@ -15,14 +19,7 @@ type Clerk struct {
   leaderId  int     //store most recent Id of leader
 }
 
-func nrand() int64 {
-	max := big.NewInt(int64(1) << 62)
-	bigx, _ := rand.Int(rand.Reader, max)
-	x := bigx.Int64()
-	return x
-}
-
-func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
+func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {// {{{
 	ck := new(Clerk)
 	ck.servers = servers
 
@@ -31,7 +28,7 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
   ck.opId = 0
   ck.leaderId = 0 
 	return ck
-}
+}// }}}
 
 //
 // fetch the current value for a key.
@@ -46,35 +43,31 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 // arguments. and reply must be passed as a pointer.
 //
 func (ck *Clerk) Get(key string) string {// {{{
-  ck.debug("Initializing Get(key=%v)\n", key)
+  ck.debug("Start Op-%v: Get(key=%v)\n", ck.opId, key)
   args := GetArgs {
     Key: key,
     ClientId: ck.me,
     OpId: ck.opId}
+  ck.opId++
   for {
-    var reply GetReply
-    ok := ck.servers[ck.leaderId].Call("RaftKV.Get", &args, &reply)
+    for i := range(ck.servers) {
+      serverId := (ck.leaderId + i) % len(ck.servers)
+      ck.debug("Op-%v sent to server-port-%v\n", args.OpId, serverId)
+      var reply GetReply
+      ok := ck.servers[serverId].Call("RaftKV.Get", &args, &reply)
 
-    //no reponse
-    if !ok {
-      ck.leaderId = (ck.leaderId + 1) % len(ck.servers)
-      continue
-    } 
-    //retry different servers
-    if reply.WrongLeader {
-      if reply.LeaderId == -1 {
-        ck.leaderId = (ck.leaderId + 1) % len(ck.servers)
-      } else {
-        ck.leaderId = reply.LeaderId
+      //no reponse or wrongLeader
+      if !ok || reply.WrongLeader { continue } 
+      //error handlign
+      //success
+      if reply.Err == OK || reply.Err == ErrNoKey {
+        ck.debug("Finished Op-%v Get(key=%v)=%v\n\n\n", args.OpId, key, reply.Value)
+        ck.leaderId = serverId
+	      return reply.Value
       }
-      continue
-    } 
-    //error handlign
-    //success
-    if reply.Err == OK || reply.Err == ErrNoKey {
-      ck.debug("Finished Get(key=%v)\n\n", key)
-	    return reply.Value
     }
+    ck.debug("No Leader: waiting for election of Raft\n\n")
+    <-time.After(REQ_INTERVAL)
   }
 }// }}}
 
@@ -88,40 +81,33 @@ func (ck *Clerk) Get(key string) string {// {{{
 // arguments. and reply must be passed as a pointer.
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {// {{{
-  ck.debug("Initializing %v(key=%v, value=%v)\n", op, key, value)
+  ck.debug("Start Op-%v: %v(key=%v, value=%v)\n", ck.opId, op, key, value)
   args := PutAppendArgs {
     Key: key,
     Value: value,
     Op: op,
     ClientId: ck.me,
     OpId: ck.opId}
+  ck.opId++
   for {
-    var reply PutAppendReply  //has to be inside the loop
-    ok := ck.servers[ck.leaderId].Call("RaftKV.PutAppend", &args, &reply)
-    old := ck.leaderId
-    //no reponse
-    if !ok {
-      ck.leaderId = (ck.leaderId + 1) % len(ck.servers)
-      ck.debug("no-response: old=%v new=%v, total=%v\n", old, ck.leaderId, len(ck.servers))
-      continue
-    } 
+    for i := range (ck.servers) {
+      serverId := (ck.leaderId + i) % len(ck.servers)
+      ck.debug("Op-%v sent to server-port-%v\n", args.OpId, serverId)
+      var reply PutAppendReply  //has to be inside the loop
+      ok := ck.servers[serverId].Call("RaftKV.PutAppend", &args, &reply)
 
-    //retry different servers
-    if reply.WrongLeader {
-      if reply.LeaderId == -1 {
-        ck.leaderId = (ck.leaderId + 1) % len(ck.servers)
-      } 
-      //else {
-      //  ck.leaderId = reply.LeaderId
-      //}
-      ck.debug("wrong-leader: old=%v new=%v, total=%v\n", old, ck.leaderId, len(ck.servers))
-      continue
-    } 
-    //success
-    if reply.Err == OK {
-      ck.debug("Finished %v(%v, %v)\n", op, key, value)
-      return
+      //no reponse or wrongLeader
+      if !ok || reply.WrongLeader { continue } 
+
+      //success
+      if reply.Err == OK {
+        ck.debug("Finished Op-%v %v(key=%v, value=%v)\n\n\n", args.OpId, op, key, value)
+        ck.leaderId = serverId
+        return
+      }
     }
+    ck.debug("No Leader: waiting for election of Raft\n\n")
+    <-time.After(REQ_INTERVAL)
   }
 }// }}}
 
@@ -131,6 +117,14 @@ func (ck *Clerk) Put(key string, value string) {
 func (ck *Clerk) Append(key string, value string) {
 	ck.PutAppend(key, value, "Append")
 }
+
+//helper functions
+func nrand() int64 {// {{{
+	max := big.NewInt(int64(1) << 62)
+	bigx, _ := rand.Int(rand.Reader, max)
+	x := bigx.Int64()
+	return x
+}// }}}
 
 func (ck *Clerk) debug(format string, a ...interface{}) (n int, err error) {// {{{
   format = fmt.Sprintf("client-%v:\t", ck.me) + format

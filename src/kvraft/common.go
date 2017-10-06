@@ -1,10 +1,11 @@
 package raftkv
 
 const (
-	OK          = "OK"
-	ErrNoKey    = "ErrNoKey"
-  ErrTimeOut  = "ErrTimeOut"
-  ErrTermChg  = "ErrTermChg"
+	OK        = "OK"
+	ErrNoKey  = "ErrNoKey"
+  ErrTO     = "ErrTimeOut"
+  ErrTC     = "ErrTermChange"
+  ErrWL     = "ErrWrongLeader"
 )
 
 type Err string
@@ -22,7 +23,7 @@ type PutAppendArgs struct {
 type PutAppendReply struct {
 	WrongLeader bool
 	Err         Err
-  LeaderId    int
+  //LeaderId    int
 }
 
 type GetArgs struct {
@@ -35,5 +36,5 @@ type GetReply struct {
 	WrongLeader bool
 	Err         Err
 	Value       string
-  LeaderId    int
+  //LeaderId    int
 }

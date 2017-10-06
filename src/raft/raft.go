@@ -96,11 +96,11 @@ func (rf *Raft) GetState() (int, bool) {// {{{
 }// }}}
 
 //Helper Functions// {{{
-func (rf *Raft) GetLeaderId() int {
-  rf.mu.Lock()
-  defer rf.mu.Unlock()
-  return rf.leaderId
-}
+//func (rf *Raft) GetLeaderId() int {
+//  rf.mu.Lock()
+//  defer rf.mu.Unlock()
+//  return rf.leaderId
+//}
 
 func (rf *Raft) getRandTimeout() (time.Duration) {
   return (time.Duration(rand.Int63() % (TIMEOUT_MAX - TIMEOUT_MIN) + TIMEOUT_MIN) *
@@ -275,7 +275,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
     if rf.state == CANDIDATE && rf.voteCnt > len(rf.peers) / 2 {
       rf.debug("leader elected\n") 
       rf.state = LEADER
-      rf.leaderId = rf.me
+      //rf.leaderId = rf.me
       for i := range(rf.peers) { 
         //last log entry index + 1
         //prevLogIdx always send, so heartBeat withouth entry
@@ -328,7 +328,7 @@ func (rf *Raft) AppendEntries(args *AppendEntryArgs, reply *AppendEntryReply) {/
 
   rf.curTerm = args.Term
   rf.state = FOLLOWER
-  rf.leaderId = args.LeaderId
+  //rf.leaderId = args.LeaderId
   rf.electTimer.Reset(rf.getRandTimeout())
   
   reply.Term = rf.curTerm
@@ -467,7 +467,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntryArgs, reply *Appe
 // the leader.
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {// {{{
-  //rf.debug("Start a command\n")
+  //fmt.Println("Start a command")
   index := -1
   term, isLeader := rf.GetState()
   if isLeader {
@@ -479,6 +479,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {// {{{
     rf.debug("Command appended to Log: idx=%v, cmd=%v\n", index, command)
     rf.mu.Unlock()
   }
+  //fmt.Println("Start a command return")
 	return index, term, isLeader
 }// }}}
 
@@ -509,7 +510,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
-  rf.leaderId = -1
+  //rf.leaderId = -1
   rf.cmtChan = make(chan bool, MAX_CHAN_DEPTH)
   rf.applyChan = applyCh
 
@@ -593,9 +594,11 @@ func (rf *Raft) broadcastRequestVote() {// {{{
   voteArgs.LastLogTerm = rf.getLastLogTerm() 
   voteArgs.LastLogIdx = len(rf.log) - 1
   rf.electTimer.Reset(rf.getRandTimeout())  //reset timer once broadcast
+  me := rf.me
+  state := rf.state
   rf.mu.Unlock()
   for i := range rf.peers {
-    if i != rf.me && rf.state == CANDIDATE {
+    if i != me && state == CANDIDATE {
       go func (i int) {
         var voteReply RequestVoteReply
         rf.sendRequestVote(i, &voteArgs, &voteReply)
@@ -621,9 +624,11 @@ func (rf *Raft) broadcastAppendEntries() {// {{{
   appendArgs.Term = rf.curTerm
   appendArgs.LeaderId = rf.me
   appendArgs.LeaderCmtIdx = rf.cmtIdx
+  me := rf.me
+  state := rf.state
   rf.mu.Unlock()
   for i := range rf.peers {
-    if i != rf.me && rf.state == LEADER {
+    if i != me && state == LEADER {
       rf.mu.Lock()
       appendArgs.PrevLogIdx = rf.nextIdx[i] - 1
       appendArgs.Entries = make([]LogEntry, 0)
@@ -648,12 +653,7 @@ func (rf *Raft) broadcastAppendEntries() {// {{{
 }// }}}
 
 func (rf *Raft) runAsLeader() {// {{{
-  _, isLeader := rf.GetState()
-  //leader state could be changed due to obsolete term
-  //add condition to reduce RPC messages 
-  if isLeader {
-    rf.broadcastAppendEntries()
-  }
+  rf.broadcastAppendEntries()
   time.Sleep(HB_INTERVAL)
 }// }}}
 

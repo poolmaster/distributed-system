@@ -1,24 +1,24 @@
-package raftkv
+package raftkv 
 
-import (
-	"encoding/gob"
-	"labrpc"
-	"log"
-	"raft"
-	"sync"
-  "time"
+import ( 
+  "encoding/gob" 
+  "labrpc" 
+  "log" 
+  "raft" 
+  "sync" 
+  "time" 
   "fmt"
   //"errors"
 )
 
-const Debug = 1
+const Debug = 0
 
 const (
   GET = "Get"
   PUT = "Put"
   APPEND = "Append"
   
-  OP_TIMEOUT = 2000 * time.Millisecond
+  OP_TIMEOUT = 400 * time.Millisecond
 )
 
 type Op struct {
@@ -31,6 +31,12 @@ type Op struct {
   ClientId  int64
 }
 
+type Result struct {
+  op      Op
+  err     Err 
+  value   string
+}
+
 type RaftKV struct {// {{{
 	mu      sync.Mutex
 	me      int
@@ -40,44 +46,107 @@ type RaftKV struct {// {{{
 	maxraftstate int // snapshot if log grows this big
 
   //kv state
-  db          map[string]string
-  idxCmtOpCh  map[int]chan Op   //channel per index for committed Op 
+  db        map[string]string   //kv storage 
+  resCh     map[int]chan Result //channel per index for applied results 
+  lastOpId  map[int64]int64     //per client most recent returned request
+}// }}}
+
+func (kv *RaftKV) commitOp() {// {{{
+  for {
+    msg := <-kv.applyCh
+    res := Result {op: msg.Command.(Op), err: OK, value: ""} 
+    kv.mu.Lock()
+    //handle duplicate
+    duplicate := false
+    temp, ok := kv.lastOpId[res.op.ClientId]
+    if ok && temp >= res.op.OpId { 
+      kv.debug("Client-%v: Op-%v has been applied. return\n", res.op.ClientId, res.op.OpId)
+      duplicate = true
+    } else {
+      kv.lastOpId[res.op.ClientId] = res.op.OpId
+      kv.debug("Ck-%v update last-applied Op to Op-%v", res.op.ClientId, kv.lastOpId[res.op.ClientId])
+    }
+    //BUG: rf.Start() could be called and return result 
+    //before resCh[idx] being created
+    if _, ok := kv.resCh[msg.Index]; !ok {
+      kv.resCh[msg.Index] = make(chan Result, 1)
+    }
+
+    //apply operation
+    //access storage
+    //BUG: for GET operation, even if with duplicate, we has to sample the data
+    //the case is: a request sent to N0, timeout, and retried to N1;
+    //N1 finished the request and thus N1 mark that op done. then N1 will not 
+    //sample the data and return. The problem is we have to return data @ most
+    //recent requested leader
+    //for PUT/APPEND, it is different, cos once we got into this stage, we wont
+    //have any error.
+    if res.op.Name == GET {
+      if value, ok := kv.db[res.op.Key]; ok {
+        res.value = value
+      } else {
+        res.err = ErrNoKey
+      }
+    } else if res.op.Name == PUT && !duplicate {
+      kv.db[res.op.Key] = res.op.Value
+    } else if res.op.Name == APPEND && !duplicate {
+      if _, ok := kv.db[res.op.Key]; !ok {
+        kv.db[res.op.Key] = "" 
+      }
+      kv.db[res.op.Key] += res.op.Value  
+    }   
+    
+    kv.resCh[msg.Index]<- res //notify RPC call
+    kv.debug("Op-%v applied (duplicate?: %v)\n", res.op.OpId, duplicate)
+    if preResCh, ok := kv.resCh[msg.Index - 1]; ok {
+      //close channel for previous index and deallocate resource
+      close(preResCh)
+      delete(kv.resCh, msg.Index - 1)
+    }
+    kv.mu.Unlock()
+  }
 }// }}}
 
 //invoke an operation and wait for Raft to commit
-//return (wrongLeader, err, leaderId)
-func (kv *RaftKV) invoke(op Op) (bool, Err, int) {// {{{
+func (kv *RaftKV) invoke(op Op) Result {// {{{
+  kv.debug("invoking Op-%v\n", op.OpId)
+  res := Result {op: op, err: OK, value: ""}
   cmtIdx, _, isLeader := kv.rf.Start(op) 
-  
+ 
   if !isLeader { 
-    return true, OK, kv.rf.GetLeaderId()
+    kv.debug("wrong leader for Op-%v\n", op.OpId)
+    res.err = ErrWL
+    return res 
   }
 
   kv.mu.Lock()
-  cmtOpCh, ok := kv.idxCmtOpCh[cmtIdx] 
-  if !ok {
-    cmtOpCh = make(chan Op, 1)
-    kv.idxCmtOpCh[cmtIdx] = cmtOpCh
+  if _, ok := kv.resCh[cmtIdx]; !ok {
+    kv.resCh[cmtIdx] = make(chan Result, 1)
   }
+  resIdxCh := kv.resCh[cmtIdx]
   kv.mu.Unlock()
   //two condition for return error:
   //1. term change
   //2. timeout: with dection of term change, timeout will be
   //case where leader is partitioned. So better try different
   //server in this case
+  kv.debug("waiting for Op-%v\n", op.OpId)
   select {
     case <-time.After(OP_TIMEOUT):
-      return true, ErrTimeOut, -1
-    case  cmtOp := <-cmtOpCh:
+      kv.debug("timeout for Op-%v\n", op.OpId)
+      res.err = ErrTO
+    case res = <-resIdxCh: 
       //if it is a different op, it must come from a different raft
-      //there for, we wont have cmtOpCh to handle 1-to-many mapping
-      if cmtOp.ClientId != op.ClientId || cmtOp.OpId != op.OpId {
-        return true, ErrTermChg, -1 
+      //therefore, we wont have resIdxCh to handle 1-to-many mapping
+      if res.op.ClientId != op.ClientId || res.op.OpId != op.OpId {
+        kv.debug("term chagne for Op-%v\n", op.OpId)
+        res.err = ErrTC
       } else {
-        kv.debug("Executing Op")
-        return false, OK, -1
+        kv.debug("Executed Op-%v: %v(key=%v, value=%v) from Client-%v\n", 
+          op.OpId, op.Name, op.Key, op.Value, op.ClientId)
       }
   }
+  return res
 }// }}}
 
 func (kv *RaftKV) Get(args *GetArgs, reply *GetReply) {// {{{
@@ -88,23 +157,18 @@ func (kv *RaftKV) Get(args *GetArgs, reply *GetReply) {// {{{
     ClientId: args.ClientId,
     OpId: args.OpId }
   
-  reply.WrongLeader, reply.Err, reply.LeaderId = kv.invoke(op) 
-  if !reply.WrongLeader && (reply.Err == OK) {
-    kv.mu.Lock()
-    value, ok := kv.db[args.Key]
-    if ok {
-      reply.Value = value
-    } else {
-      reply.Value = ""
-      reply.Err = ErrNoKey
-    }
-    kv.mu.Unlock()
+  result := kv.invoke(op) 
+  reply.WrongLeader = (result.err == ErrWL)
+  reply.Err = result.err
+  reply.Value = result.value
+  
+  if (reply.Err == OK || reply.Err == ErrNoKey) && result.op != op {
+    fmt.Printf("sanity check: result.opId=%v, original.opId=%v\n", result.op.OpId, op.OpId)
+    panic("op mismatch for a valid return!")
   }
-  return
 }// }}}
 
 func (kv *RaftKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {// {{{
-  kv.debug("get called with PutAppend()\n")
   op := Op {
     Name: args.Op,
     Key: args.Key,
@@ -112,19 +176,14 @@ func (kv *RaftKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {// {{{
     ClientId: args.ClientId,
     OpId: args.OpId }
 
-  reply.WrongLeader, reply.Err, reply.LeaderId = kv.invoke(op) 
-  if !reply.WrongLeader && (reply.Err == OK) {
-    kv.mu.Lock()
-    if args.Op == PUT {
-      kv.db[args.Key] = args.Value
-    } else if args.Op == APPEND {
-      kv.db[args.Key] += args.Value
-    } else {
-      panic("Illegal OpType being provided!")
-    }
-    kv.mu.Unlock()
+  result := kv.invoke(op) 
+  reply.WrongLeader = (result.err == ErrWL)
+  reply.Err = result.err
+
+  if reply.Err == OK && result.op != op {
+    fmt.Printf("sanity check: result.opId=%v, original.opId=%v\n", result.op.OpId, op.OpId)
+    panic("op mismatch for a valid return!")
   }
-  return
 }// }}}
 
 // the tester calls Kill() when a RaftKV instance won't
@@ -162,20 +221,12 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
   kv.db = make(map[string]string)
-  kv.idxCmtOpCh = make(map[int]chan Op)    
+  kv.resCh = make(map[int]chan Result)    
+  kv.lastOpId = make(map[int64]int64)
   
   go kv.commitOp()
 
 	return kv
-}// }}}
-
-func (kv *RaftKV) commitOp() {// {{{
-  for {
-    msg := <-kv.applyCh
-    kv.mu.Lock()
-    kv.idxCmtOpCh[msg.Index]<- msg.Command.(Op)
-    kv.mu.Unlock()
-  }
 }// }}}
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {// {{{
