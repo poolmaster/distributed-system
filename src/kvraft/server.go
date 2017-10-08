@@ -76,7 +76,7 @@ func (kv *RaftKV) commitOp() {// {{{
     //access storage
     //BUG: for GET operation, even if with duplicate, we has to sample the data
     //the case is: a request sent to N0, timeout, and retried to N1;
-    //N1 finished the request and thus N1 mark that op done. then N1 will not 
+    //N0 came back to finish the request and thus N0 mark that op done. then N1 will not 
     //sample the data and return. The problem is we have to return data @ most
     //recent requested leader
     //for PUT/APPEND, it is different, cos once we got into this stage, we wont
@@ -208,25 +208,25 @@ func (kv *RaftKV) Kill() {// {{{
 // for any long-running work.
 //
 func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxraftstate int) *RaftKV {// {{{
-	// call gob.Register on structures you want
-	// Go's RPC library to marshall/unmarshall.
-	gob.Register(Op{})
-
-	kv := new(RaftKV)
-	kv.me = me
-	kv.maxraftstate = maxraftstate
-
-	// You may need initialization code here.
-	kv.applyCh = make(chan raft.ApplyMsg)
-	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
-
+  // call gob.Register on structures you want
+  // Go's RPC library to marshall/unmarshall.
+  gob.Register(Op{})
+  
+  kv := new(RaftKV)
+  kv.me = me
+  kv.maxraftstate = maxraftstate
+  
+  // You may need initialization code here.
+  kv.applyCh = make(chan raft.ApplyMsg)
+  kv.rf = raft.Make(servers, me, persister, kv.applyCh)
+  
   kv.db = make(map[string]string)
   kv.resCh = make(map[int]chan Result)    
   kv.lastOpId = make(map[int64]int64)
   
   go kv.commitOp()
-
-	return kv
+  
+  return kv
 }// }}}
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {// {{{
