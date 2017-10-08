@@ -65,33 +65,33 @@ type Raft struct {// {{{
 	peers       []*labrpc.ClientEnd // RPC end points of all peers
 	persister   *Persister          // Object to hold this peer's persisted state
 	me          int                 // this peer's index into peers[]
-  leaderId    int                 // record leader id for redirection
-  
-  cmtChan     chan bool           //send commit signal 
-  applyChan   chan ApplyMsg       //chan to handle committed message
-  electTimer  *time.Timer         //timer for election cycle
-  state       int 
-  voteCnt     int 
-
-  //persistent state of servers
-  curTerm     int                 //init to 0
-  votedFor    int                 //index for candidate that received vote in current Term
-  log         []LogEntry
-  //volatile state of servers
-  cmtIdx      int                 //index of highest logEntry committed 
-  applyIdx    int                 //index of highest logEntry applied to SM
-  //volatile state of leader
-  nextIdx     []int               //index of next logEntry to be sent to followers
-  matchIdx    []int               //index of highest logEntry known to be replicated for each follower
+	leaderId    int                 // record leader id for redirection
+	
+	cmtChan     chan bool           //send commit signal 
+	applyChan   chan ApplyMsg       //chan to handle committed message
+	electTimer  *time.Timer         //timer for election cycle
+	state       int 
+	voteCnt     int 
+	
+	//persistent state of servers
+	curTerm     int                 //init to 0
+	votedFor    int                 //index for candidate that received vote in current Term
+	log         []LogEntry
+	//volatile state of servers
+	cmtIdx      int                 //index of highest logEntry committed 
+	applyIdx    int                 //index of highest logEntry applied to SM
+	//volatile state of leader
+	nextIdx     []int               //index of next logEntry to be sent to followers
+	matchIdx    []int               //index of highest logEntry known to be replicated for each follower
 }// }}}
 
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {// {{{
-  rf.mu.Lock()
-  term := rf.curTerm
-  isleader := (rf.state == LEADER)
-  rf.mu.Unlock() 
+	rf.mu.Lock()
+	term := rf.curTerm
+	isleader := (rf.state == LEADER)
+	rf.mu.Unlock() 
 	return term, isleader
 }// }}}
 
@@ -152,9 +152,9 @@ func (rf *Raft) readPersist(data []byte) {// {{{
 	}
 	readBuffer := bytes.NewBuffer(data)
 	decoder := gob.NewDecoder(readBuffer)
-  decoder.Decode(&rf.curTerm)
-  decoder.Decode(&rf.votedFor)
-  decoder.Decode(&rf.log)
+	decoder.Decode(&rf.curTerm)
+	decoder.Decode(&rf.votedFor)
+	decoder.Decode(&rf.log)
 }// }}}
 
 // RequestVote RPC arguments structure.
@@ -517,31 +517,31 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
-  //rf.leaderId = -1
-  rf.cmtChan = make(chan bool, MAX_CHAN_DEPTH)
-  rf.applyChan = applyCh
-
+	//rf.leaderId = -1
+	rf.cmtChan = make(chan bool, MAX_CHAN_DEPTH)
+	rf.applyChan = applyCh
+	
 	//initialization
-  rf.electTimer = time.NewTimer(TIMEOUT_MAX * time.Millisecond)
-  rf.state = FOLLOWER
-  rf.voteCnt = 0
-  rf.cmtIdx = 0
-  rf.applyIdx = 0
-  rf.nextIdx = make([]int, len(rf.peers)) //initialize when become leader
-  rf.matchIdx = make([]int, len(rf.peers))
-  for i := range rf.matchIdx {
-    rf.matchIdx[i] = 0
-  }
+	rf.electTimer = time.NewTimer(TIMEOUT_MAX * time.Millisecond)
+	rf.state = FOLLOWER
+	rf.voteCnt = 0
+	rf.cmtIdx = 0
+	rf.applyIdx = 0
+	rf.nextIdx = make([]int, len(rf.peers)) //initialize when become leader
+	rf.matchIdx = make([]int, len(rf.peers))
+	for i := range rf.matchIdx {
+	  rf.matchIdx[i] = 0
+	}
 	// initialize from state persisted before a crash
-  rf.curTerm = 0
-  rf.votedFor = -1
-  rf.log = make([]LogEntry, 0)
-  rf.log = append(rf.log, LogEntry{Term: 0})
+	rf.curTerm = 0
+	rf.votedFor = -1
+	rf.log = make([]LogEntry, 0)
+	rf.log = append(rf.log, LogEntry{Term: 0})
 	rf.readPersist(persister.ReadRaftState())
-
-  go rf.writeApplyCh()
-  go rf.run()
-
+	
+	go rf.writeApplyCh()
+	go rf.run()
+	
 	return rf
 }// }}}
 

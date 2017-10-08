@@ -14,9 +14,9 @@ const (
 
 type Clerk struct {
 	servers   []*labrpc.ClientEnd
-  me        int64   //client id
-  opId      int64   //id for next op to be finished
-  leaderId  int     //store most recent Id of leader
+	me        int64   //client id
+	opId      int64   //id for next op to be finished
+	leaderId  int     //store most recent Id of leader
 }
 
 func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {// {{{
@@ -24,9 +24,9 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {// {{{
 	ck.servers = servers
 
   //initialization
-  ck.me = nrand()  
-  ck.opId = 0
-  ck.leaderId = 0 
+	ck.me = nrand()  
+	ck.opId = 0
+	ck.leaderId = 0 
 	return ck
 }// }}}
 
