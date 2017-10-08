@@ -422,6 +422,13 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntryArgs, reply *Appe
       server, reply.Term, reply.NextIdx - 1, rf.cmtIdx)
     //oldCmtIdx := rf.cmtIdx
     for i := reply.NextIdx - 1; i > rf.cmtIdx; i-- {
+      //ISSUE: Figure 8 problem caused consistency problem
+      //but the fix by not committing previous term command will bring livelock
+      //For example: node 0 is leader and got opA and failed. node 3 becomes leader 
+      //and got opA and failed. node 0 recovered and obviously in a new term. And
+      //thus node 0 will not commit until it client retry opA
+      //Therefore, client has to have some kind of timeout mechanism OR
+      //a solution would be leader detect this and append a no-op by itself
       if rf.log[i].Term < rf.curTerm {
         //BUG: prolem of Figure 8 in paper
         //only commit log in current term by counting
